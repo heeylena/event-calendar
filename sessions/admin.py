@@ -3,24 +3,27 @@ Admin configuration for the sessions app.
 """
 
 from django.contrib import admin
-from .models import Session, SessionException
+from .models import RecurrencePattern, SessionOccurrence
 
 
-@admin.register(Session)
-class SessionAdmin(admin.ModelAdmin):
-    """Admin interface for Session model."""
+@admin.register(RecurrencePattern)
+class RecurrencePatternAdmin(admin.ModelAdmin):
+    """Admin interface for RecurrencePattern model."""
     
-    list_display = ['title', 'session_type', 'start_datetime', 'recurrence_day', 'duration_minutes']
-    list_filter = ['session_type', 'recurrence_day', 'created_at']
+    list_display = ['title', 'weekday_name', 'time', 'start_date', 'end_date', 'is_active']
+    list_filter = ['is_active', 'weekday', 'frequency', 'created_at']
     search_fields = ['title', 'description']
-    date_hierarchy = 'start_datetime'
+    date_hierarchy = 'start_date'
     
     fieldsets = (
         ('Basic Information', {
-            'fields': ('title', 'description', 'session_type')
+            'fields': ('title', 'description', 'is_active')
         }),
-        ('Schedule', {
-            'fields': ('start_datetime', 'duration_minutes', 'recurrence_day')
+        ('Recurrence Rules', {
+            'fields': ('frequency', 'weekday', 'time', 'duration_minutes')
+        }),
+        ('Pattern Boundaries', {
+            'fields': ('start_date', 'end_date')
         }),
         ('Metadata', {
             'fields': ('created_at', 'updated_at'),
@@ -31,23 +34,29 @@ class SessionAdmin(admin.ModelAdmin):
     readonly_fields = ['created_at', 'updated_at']
 
 
-@admin.register(SessionException)
-class SessionExceptionAdmin(admin.ModelAdmin):
-    """Admin interface for SessionException model."""
+@admin.register(SessionOccurrence)
+class SessionOccurrenceAdmin(admin.ModelAdmin):
+    """Admin interface for SessionOccurrence model."""
     
-    list_display = ['session', 'exception_date', 'is_cancelled', 'modified_datetime']
-    list_filter = ['is_cancelled', 'created_at']
-    search_fields = ['session__title']
-    date_hierarchy = 'exception_date'
+    list_display = ['title', 'start_datetime', 'duration_minutes', 'status', 'is_exception', 'recurrence_pattern']
+    list_filter = ['status', 'is_exception', 'recurrence_pattern', 'created_at']
+    search_fields = ['title', 'description']
+    date_hierarchy = 'start_datetime'
     
     fieldsets = (
-        ('Exception Details', {
-            'fields': ('session', 'exception_date', 'is_cancelled', 'modified_datetime')
+        ('Basic Information', {
+            'fields': ('title', 'description', 'recurrence_pattern')
+        }),
+        ('Schedule', {
+            'fields': ('start_datetime', 'duration_minutes')
+        }),
+        ('Status', {
+            'fields': ('status', 'is_exception')
         }),
         ('Metadata', {
-            'fields': ('created_at',),
+            'fields': ('created_at', 'updated_at'),
             'classes': ('collapse',)
         }),
     )
     
-    readonly_fields = ['created_at']
+    readonly_fields = ['created_at', 'updated_at']
