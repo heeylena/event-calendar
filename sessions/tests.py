@@ -17,13 +17,8 @@ from rest_framework import status
 from datetime import datetime, date, time, timedelta
 
 from .models import RecurrencePattern, SessionOccurrence
-from .services import (
-    OccurrenceGenerationService,
-    OccurrenceService,
-    OccurrenceUpdateData,
-    PatternUpdateData,
-    RecurrencePatternService,
-)
+from . import services
+from .types import OccurrenceUpdateData, PatternUpdateData
 
 
 class RecurrencePatternModelTests(TestCase):
@@ -241,10 +236,10 @@ class OccurrenceGenerationServiceTests(TestCase):
             duration_minutes=60
         )
         
-        # Generate 1 month ahead
-        occurrences = OccurrenceGenerationService.generate_for_pattern(
+        # Generate 30 days ahead
+        occurrences = services.generate_occurrences_for_pattern(
             pattern,
-            months_ahead=1
+            days_ahead=30
         )
         
         # Should generate ~4 Mondays
@@ -264,10 +259,10 @@ class OccurrenceGenerationServiceTests(TestCase):
             duration_minutes=60
         )
         
-        first_run = OccurrenceGenerationService.generate_for_pattern(pattern, months_ahead=1)
+        first_run = services.generate_occurrences_for_pattern(pattern, days_ahead=30)
         first_count = len(first_run)
         
-        second_run = OccurrenceGenerationService.generate_for_pattern(pattern, months_ahead=1)
+        second_run = services.generate_occurrences_for_pattern(pattern, days_ahead=30)
         second_count = len(second_run)
         
         # Second run should create 0 new occurrences
@@ -283,14 +278,14 @@ class RecurrencePatternServiceTests(TestCase):
     
     def test_create_pattern_with_generation(self):
         """Test creating pattern and auto-generating occurrences."""
-        pattern, count = RecurrencePatternService.create_pattern(
+        pattern, count = services.create_recurrence_pattern(
             title="New Meeting",
             weekday=3,  # Thursday
             time_of_day=time(15, 0),
             start_date=date(2024, 11, 1),
             duration_minutes=90,
             generate_occurrences=True,
-            months_ahead=1
+            days_ahead=30
         )
         
         self.assertIsNotNone(pattern.id)
@@ -302,7 +297,7 @@ class RecurrencePatternServiceTests(TestCase):
     
     def test_create_pattern_without_generation(self):
         """Test creating pattern without auto-generation."""
-        pattern, count = RecurrencePatternService.create_pattern(
+        pattern, count = services.create_recurrence_pattern(
             title="Manual Pattern",
             weekday=4,
             time_of_day=time(11, 0),
@@ -347,12 +342,12 @@ class OccurrenceServiceTests(TestCase):
         start = timezone.make_aware(datetime(2024, 11, 1, 0, 0))
         end = timezone.make_aware(datetime(2024, 11, 30, 23, 59))
         
-        occurrences = OccurrenceService.get_occurrences_in_range(start, end)
+        occurrences = services.get_occurrences_in_range(start, end)
         self.assertGreaterEqual(len(occurrences), 2)
     
     def test_create_one_time(self):
         """Test creating a one-time occurrence."""
-        occurrence = OccurrenceService.create_one_time(
+        occurrence = services.create_one_time_occurrence(
             title="Special Meeting",
             start_datetime=timezone.make_aware(datetime(2024, 11, 15, 14, 0)),
             duration_minutes=120,
@@ -364,7 +359,7 @@ class OccurrenceServiceTests(TestCase):
     
     def test_cancel_occurrence(self):
         """Test cancelling an occurrence."""
-        OccurrenceService.cancel_occurrence(self.occ1)
+        services.cancel_occurrence(self.occ1)
         
         self.occ1.refresh_from_db()
         self.assertEqual(self.occ1.status, 'cancelled')
@@ -372,7 +367,7 @@ class OccurrenceServiceTests(TestCase):
     
     def test_complete_occurrence(self):
         """Test completing an occurrence."""
-        OccurrenceService.complete_occurrence(self.occ1)
+        services.complete_occurrence(self.occ1)
         
         self.occ1.refresh_from_db()
         self.assertEqual(self.occ1.status, 'completed')
@@ -385,8 +380,8 @@ class OccurrenceServiceTests(TestCase):
             start_datetime=new_datetime,
             title="Updated Meeting"
         )
-        updated = OccurrenceService.update_occurrence(
-            self.occ1,
+        updated = services.update_occurrence(
+            occurrence=self.occ1,
             update_data=update_data
         )
         
@@ -585,7 +580,7 @@ class IntegrationTests(APITestCase):
             "start_date": "2024-11-04",
             "duration_minutes": 60,
             "generate_occurrences": True,
-            "months_ahead": 1
+            "days_ahead": 30
         }
         
         response = self.client.post('/api/patterns/', pattern_data, format='json')
@@ -650,7 +645,7 @@ class ManagementCommandTests(TestCase):
         )
         
         out = StringIO()
-        call_command('generate_occurrences', '--months=2', stdout=out)
+        call_command('generate_occurrences', '--days=60', stdout=out)
         
         output = out.getvalue()
         self.assertIn('Successfully generated', output)

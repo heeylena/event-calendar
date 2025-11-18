@@ -6,7 +6,7 @@ future occurrences are always available.
 """
 
 from django.core.management.base import BaseCommand
-from sessions.services import OccurrenceGenerationService
+from sessions import services
 
 
 class Command(BaseCommand):
@@ -14,21 +14,21 @@ class Command(BaseCommand):
     
     def add_arguments(self, parser):
         parser.add_argument(
-            '--months',
+            '--days',
             type=int,
-            default=3,
-            help='Number of months ahead to generate occurrences (default: 3)'
+            default=7,
+            help='Number of days ahead to generate occurrences (default: 7)'
         )
     
     def handle(self, *args, **options):
-        months_ahead = options['months']
+        days_ahead = options['days']
         
         self.stdout.write(
-            f'Generating occurrences for the next {months_ahead} months...'
+            f'Generating occurrences for the next {days_ahead} days...'
         )
         
-        total_created = OccurrenceGenerationService.generate_for_all_patterns(
-            months_ahead=months_ahead
+        total_created = services.generate_occurrences_for_all_patterns(
+            days_ahead=days_ahead
         )
         
         self.stdout.write(

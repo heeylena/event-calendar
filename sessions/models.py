@@ -6,6 +6,8 @@ This implementation uses the Occurrence Materialization Pattern where:
 - SessionOccurrence stores ALL actual bookable session instances (both one-time and recurring)
 """
 
+from datetime import timedelta
+
 from django.db import models
 from django.core.exceptions import ValidationError
 from django.utils import timezone
@@ -169,7 +171,6 @@ class SessionOccurrence(models.Model):
     @property
     def end_datetime(self):
         """Calculate end datetime based on duration."""
-        from datetime import timedelta
         return self.start_datetime + timedelta(minutes=self.duration_minutes)
     
     def clean(self):

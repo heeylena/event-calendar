@@ -9,20 +9,16 @@ from rest_framework.views import APIView
 
 from .models import RecurrencePattern, SessionOccurrence
 from .serializers import (
-    RecurrencePatternSerializer,
+    RecurrencePatternReadSerializer,
+    RecurrencePatternWriteSerializer,
     RecurrencePatternCreateSerializer,
-    SessionOccurrenceSerializer,
+    SessionOccurrenceReadSerializer,
     SessionOccurrenceCreateSerializer,
     SessionOccurrenceUpdateSerializer,
     DateRangeQuerySerializer,
 )
-from .services import (
-    RecurrencePatternService,
-    OccurrenceService,
-    OccurrenceGenerationService,
-    PatternUpdateData,
-    OccurrenceUpdateData,
-)
+from . import services
+from .types import PatternUpdateData, OccurrenceUpdateData
 
 
 class RecurrencePatternListCreateView(APIView):
@@ -36,7 +32,7 @@ class RecurrencePatternListCreateView(APIView):
     def get(self, request):
         """List all recurrence patterns."""
         patterns = RecurrencePattern.objects.all()
-        serializer = RecurrencePatternSerializer(patterns, many=True)
+        serializer = RecurrencePatternReadSerializer(patterns, many=True)
         return Response(serializer.data)
     
     def post(self, request):
@@ -44,18 +40,8 @@ class RecurrencePatternListCreateView(APIView):
         serializer = RecurrencePatternCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
-        pattern, occurrences_count = self._create_pattern_from_data(
-            serializer.validated_data
-        )
-        
-        return self._build_pattern_response(pattern, occurrences_count)
-    
-    def _create_pattern_from_data(self, data: dict):
-        """Extract and call service method from validated data."""
-        generate_occurrences = data.pop('generate_occurrences', True)
-        months_ahead = data.pop('months_ahead', 3)
-        
-        return RecurrencePatternService.create_pattern(
+        data = serializer.validated_data
+        pattern, occurrences_count = services.create_recurrence_pattern(
             title=data['title'],
             weekday=data['weekday'],
             time_of_day=data['time'],
@@ -63,15 +49,13 @@ class RecurrencePatternListCreateView(APIView):
             duration_minutes=data.get('duration_minutes', 60),
             description=data.get('description', ''),
             end_date=data.get('end_date'),
-            generate_occurrences=generate_occurrences,
-            months_ahead=months_ahead
+            generate_occurrences=data.get('generate_occurrences', True),
+            days_ahead=data.get('days_ahead', 7)
         )
-    
-    def _build_pattern_response(self, pattern, occurrences_count: int):
-        """Build HTTP response for pattern creation."""
-        serializer = RecurrencePatternSerializer(pattern)
+        
+        response_serializer = RecurrencePatternReadSerializer(pattern)
         return Response({
-            'pattern': serializer.data,
+            'pattern': response_serializer.data,
             'occurrences_created': occurrences_count
         }, status=status.HTTP_201_CREATED)
 
@@ -88,13 +72,13 @@ class RecurrencePatternDetailView(APIView):
     def get(self, request, pk):
         """Retrieve a recurrence pattern."""
         pattern = get_object_or_404(RecurrencePattern, pk=pk)
-        serializer = RecurrencePatternSerializer(pattern)
+        serializer = RecurrencePatternReadSerializer(pattern)
         return Response(serializer.data)
     
     def patch(self, request, pk):
         """Update a recurrence pattern."""
         pattern = get_object_or_404(RecurrencePattern, pk=pk)
-        serializer = RecurrencePatternSerializer(pattern, data=request.data, partial=True)
+        serializer = RecurrencePatternWriteSerializer(pattern, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         
         update_data = PatternUpdateData(
@@ -105,13 +89,13 @@ class RecurrencePatternDetailView(APIView):
             end_date=serializer.validated_data.get('end_date'),
             is_active=serializer.validated_data.get('is_active')
         )
-        updated_pattern = RecurrencePatternService.update_pattern(
+        updated_pattern = services.update_recurrence_pattern(
             pattern=pattern,
             update_data=update_data,
             update_future_occurrences=True
         )
         
-        response_serializer = RecurrencePatternSerializer(updated_pattern)
+        response_serializer = RecurrencePatternReadSerializer(updated_pattern)
         return Response(response_serializer.data)
     
     def delete(self, request, pk):
@@ -120,7 +104,7 @@ class RecurrencePatternDetailView(APIView):
         delete_future = request.query_params.get('delete_future', 'true').lower() == 'true'
         
         title = pattern.title
-        RecurrencePatternService.delete_pattern(pattern, delete_future_occurrences=delete_future)
+        services.delete_recurrence_pattern(pattern, delete_future_occurrences=delete_future)
         
         return Response({
             'message': f'Pattern "{title}" has been deleted.'
@@ -144,13 +128,13 @@ class SessionOccurrenceListView(APIView):
         end = query_serializer.validated_data['end']
         status_filter = query_serializer.validated_data.get('status')
         
-        occurrences = OccurrenceService.get_occurrences_in_range(
+        occurrences = services.get_occurrences_in_range(
             start, 
             end, 
             status_filter
         )
         
-        serializer = SessionOccurrenceSerializer(occurrences, many=True)
+        serializer = SessionOccurrenceReadSerializer(occurrences, many=True)
         return Response(serializer.data)
     
     def post(self, request):
@@ -158,14 +142,14 @@ class SessionOccurrenceListView(APIView):
         serializer = SessionOccurrenceCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
-        occurrence = OccurrenceService.create_one_time(
+        occurrence = services.create_one_time_occurrence(
             title=serializer.validated_data['title'],
             start_datetime=serializer.validated_data['start_datetime'],
             duration_minutes=serializer.validated_data.get('duration_minutes', 60),
             description=serializer.validated_data.get('description', '')
         )
         
-        response_serializer = SessionOccurrenceSerializer(occurrence)
+        response_serializer = SessionOccurrenceReadSerializer(occurrence)
         return Response(response_serializer.data, status=status.HTTP_201_CREATED)
 
 
@@ -181,7 +165,7 @@ class SessionOccurrenceDetailView(APIView):
     def get(self, request, pk):
         """Retrieve a session occurrence."""
         occurrence = get_object_or_404(SessionOccurrence, pk=pk)
-        serializer = SessionOccurrenceSerializer(occurrence)
+        serializer = SessionOccurrenceReadSerializer(occurrence)
         return Response(serializer.data)
     
     def patch(self, request, pk):
@@ -196,19 +180,19 @@ class SessionOccurrenceDetailView(APIView):
             description=serializer.validated_data.get('description'),
             duration_minutes=serializer.validated_data.get('duration_minutes')
         )
-        updated_occurrence = OccurrenceService.update_occurrence(
+        updated_occurrence = services.update_occurrence(
             occurrence=occurrence,
             update_data=update_data
         )
         
-        response_serializer = SessionOccurrenceSerializer(updated_occurrence)
+        response_serializer = SessionOccurrenceReadSerializer(updated_occurrence)
         return Response(response_serializer.data)
     
     def delete(self, request, pk):
         """Cancel a session occurrence."""
         occurrence = get_object_or_404(SessionOccurrence, pk=pk)
         
-        OccurrenceService.cancel_occurrence(occurrence)
+        services.cancel_occurrence(occurrence)
         
         return Response({
             'message': f'Occurrence "{occurrence.title}" on {occurrence.start_datetime.date()} has been cancelled.'
@@ -226,7 +210,7 @@ class OccurrenceCompleteView(APIView):
         """Mark occurrence as completed."""
         occurrence = get_object_or_404(SessionOccurrence, pk=pk)
         
-        OccurrenceService.complete_occurrence(occurrence)
+        services.complete_occurrence(occurrence)
         
         return Response({
             'message': f'Occurrence "{occurrence.title}" has been marked as completed.'

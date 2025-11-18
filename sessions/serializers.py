@@ -9,8 +9,8 @@ from datetime import datetime, date, time
 from .models import RecurrencePattern, SessionOccurrence
 
 
-class RecurrencePatternSerializer(serializers.ModelSerializer):
-    """Serializer for RecurrencePattern model."""
+class RecurrencePatternReadSerializer(serializers.ModelSerializer):
+    """Serializer for reading/displaying RecurrencePattern (output)."""
     
     weekday_name = serializers.ReadOnlyField()
     
@@ -31,17 +31,30 @@ class RecurrencePatternSerializer(serializers.ModelSerializer):
             'created_at',
             'updated_at',
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at', 'weekday_name']
+
+
+class RecurrencePatternWriteSerializer(serializers.ModelSerializer):
+    """Serializer for updating RecurrencePattern (input)."""
+    
+    class Meta:
+        model = RecurrencePattern
+        fields = [
+            'title',
+            'description',
+            'time',
+            'duration_minutes',
+            'end_date',
+            'is_active',
+        ]
     
     def validate(self, data):
         """Validate pattern data."""
-        start_date = data.get('start_date')
-        end_date = data.get('end_date')
-        
-        if end_date and start_date and start_date >= end_date:
-            raise serializers.ValidationError({
-                'end_date': 'End date must be after start date.'
-            })
+        if 'end_date' in data and data['end_date']:
+            start_date = self.instance.start_date if self.instance else None
+            if start_date and data['end_date'] <= start_date:
+                raise serializers.ValidationError({
+                    'end_date': 'End date must be after start date.'
+                })
         
         return data
 
@@ -57,7 +70,7 @@ class RecurrencePatternCreateSerializer(serializers.Serializer):
     start_date = serializers.DateField()
     end_date = serializers.DateField(required=False, allow_null=True)
     generate_occurrences = serializers.BooleanField(default=True)
-    months_ahead = serializers.IntegerField(min_value=1, max_value=12, default=3)
+    days_ahead = serializers.IntegerField(min_value=1, max_value=90, default=7)
     
     def validate(self, data):
         """Validate creation data."""
@@ -72,17 +85,16 @@ class RecurrencePatternCreateSerializer(serializers.Serializer):
         return data
 
 
-class SessionOccurrenceSerializer(serializers.ModelSerializer):
-    """Serializer for SessionOccurrence model."""
+class SessionOccurrenceReadSerializer(serializers.ModelSerializer):
+    """Serializer for reading/displaying SessionOccurrence (output)."""
     
     pattern_id = serializers.IntegerField(
         source='recurrence_pattern.id', 
-        read_only=True,
         allow_null=True
     )
-    is_one_time = serializers.BooleanField(read_only=True)
-    is_recurring = serializers.BooleanField(read_only=True)
-    end_datetime = serializers.DateTimeField(read_only=True)
+    is_one_time = serializers.BooleanField()
+    is_recurring = serializers.BooleanField()
+    end_datetime = serializers.DateTimeField()
     
     class Meta:
         model = SessionOccurrence
@@ -101,15 +113,6 @@ class SessionOccurrenceSerializer(serializers.ModelSerializer):
             'end_datetime',
             'created_at',
             'updated_at',
-        ]
-        read_only_fields = [
-            'id', 
-            'created_at', 
-            'updated_at',
-            'pattern_id',
-            'is_one_time',
-            'is_recurring',
-            'end_datetime',
         ]
 
 
@@ -131,18 +134,6 @@ class SessionOccurrenceUpdateSerializer(serializers.Serializer):
     duration_minutes = serializers.IntegerField(min_value=1, required=False)
 
 
-class OccurrenceCancelSerializer(serializers.Serializer):
-    """Serializer for cancelling an occurrence."""
-    
-    pass
-
-
-class OccurrenceCompleteSerializer(serializers.Serializer):
-    """Serializer for marking an occurrence as completed."""
-    
-    pass
-
-
 class DateRangeQuerySerializer(serializers.Serializer):
     """Serializer for date range query parameters."""
     
@@ -161,3 +152,7 @@ class DateRangeQuerySerializer(serializers.Serializer):
                 "Start datetime must be before end datetime."
             )
         return data
+
+
+RecurrencePatternSerializer = RecurrencePatternReadSerializer
+SessionOccurrenceSerializer = SessionOccurrenceReadSerializer
