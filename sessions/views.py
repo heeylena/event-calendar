@@ -1,267 +1,217 @@
-"""
-Views for the session booking system.
-"""
+"""Views for the session booking system."""
 
-from rest_framework import viewsets, status
-from rest_framework.decorators import action
-from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
-from django.utils.dateparse import parse_datetime, parse_date
-from datetime import datetime, timedelta
+from django.utils.dateparse import parse_datetime
 
-from .models import Session, SessionException
+from rest_framework import status
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from .models import RecurrencePattern, SessionOccurrence
 from .serializers import (
-    SessionSerializer,
-    SessionDetailSerializer,
-    OccurrenceSerializer,
-    OccurrenceUpdateSerializer,
+    RecurrencePatternReadSerializer,
+    RecurrencePatternWriteSerializer,
+    RecurrencePatternCreateSerializer,
+    SessionOccurrenceReadSerializer,
+    SessionOccurrenceCreateSerializer,
+    SessionOccurrenceUpdateSerializer,
+    DateRangeQuerySerializer,
 )
+from . import services
+from .types import PatternUpdateData, OccurrenceUpdateData
 
 
-class SessionViewSet(viewsets.ModelViewSet):
+class RecurrencePatternListCreateView(APIView):
     """
-    ViewSet for managing sessions.
+    List all recurrence patterns or create a new one.
     
-    Endpoints:
-    - POST /api/sessions/ - Create a new session
-    - GET /api/sessions/ - List sessions (with ?start=X&end=Y for occurrences)
-    - GET /api/sessions/{id}/ - Retrieve session details
-    - PATCH /api/sessions/{id}/ - Update session
-    - DELETE /api/sessions/{id}/ - Delete session
-    - PATCH /api/sessions/{id}/occurrences/{date}/ - Update single occurrence
-    - DELETE /api/sessions/{id}/occurrences/{date}/ - Cancel single occurrence
+    GET /api/patterns/ - List all patterns
+    POST /api/patterns/ - Create a new pattern
     """
     
-    queryset = Session.objects.all()
-    serializer_class = SessionSerializer
-    
-    def get_serializer_class(self):
-        """Use detailed serializer for retrieve action."""
-        if self.action == 'retrieve':
-            return SessionDetailSerializer
-        return SessionSerializer
-    
-    def list(self, request, *args, **kwargs):
-        """
-        List sessions with optional date range filtering.
-        
-        Query Parameters:
-        - start: Start datetime (ISO format, required for occurrences)
-        - end: End datetime (ISO format, required for occurrences)
-        
-        If start and end are provided, returns all occurrences within the range.
-        Otherwise, returns the base sessions.
-        """
-        start_param = request.query_params.get('start')
-        end_param = request.query_params.get('end')
-        
-        # If date range is provided, generate occurrences
-        if start_param and end_param:
-            try:
-                start_dt = parse_datetime(start_param)
-                end_dt = parse_datetime(end_param)
-                
-                if not start_dt or not end_dt:
-                    return Response(
-                        {'error': 'Invalid datetime format. Use ISO 8601 format (e.g., 2024-11-01T00:00:00Z)'},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
-                
-                if start_dt >= end_dt:
-                    return Response(
-                        {'error': 'Start datetime must be before end datetime.'},
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
-                
-                # Get all sessions
-                sessions = Session.objects.all()
-                
-                # Generate occurrences for each session
-                all_occurrences = []
-                for session in sessions:
-                    occurrences = session.get_occurrences(start_dt, end_dt)
-                    all_occurrences.extend(occurrences)
-                
-                # Sort by datetime
-                all_occurrences.sort(key=lambda x: x['datetime'])
-                
-                serializer = OccurrenceSerializer(all_occurrences, many=True)
-                return Response(serializer.data)
-                
-            except Exception as e:
-                return Response(
-                    {'error': f'Error processing date range: {str(e)}'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-        
-        # No date range: return base sessions
-        queryset = self.filter_queryset(self.get_queryset())
-        serializer = self.get_serializer(queryset, many=True)
+    def get(self, request):
+        """List all recurrence patterns."""
+        patterns = RecurrencePattern.objects.all()
+        serializer = RecurrencePatternReadSerializer(patterns, many=True)
         return Response(serializer.data)
     
-    def create(self, request, *args, **kwargs):
-        """Create a new session."""
-        serializer = self.get_serializer(data=request.data)
+    def post(self, request):
+        """Create a new recurrence pattern with optional occurrence generation."""
+        serializer = RecurrencePatternCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        self.perform_create(serializer)
         
-        # Return with detailed serializer
-        instance = serializer.instance
-        detail_serializer = SessionDetailSerializer(instance)
-        
-        return Response(
-            detail_serializer.data,
-            status=status.HTTP_201_CREATED
+        data = serializer.validated_data
+        pattern, occurrences_count = services.create_recurrence_pattern(
+            title=data['title'],
+            weekday=data['weekday'],
+            time_of_day=data['time'],
+            start_date=data['start_date'],
+            duration_minutes=data.get('duration_minutes', 60),
+            description=data.get('description', ''),
+            end_date=data.get('end_date'),
+            generate_occurrences=data.get('generate_occurrences', True),
+            days_ahead=data.get('days_ahead', 7)
         )
-    
-    def update(self, request, *args, **kwargs):
-        """
-        Update a session.
         
-        For recurring sessions, this updates the base template.
-        All future occurrences (without exceptions) will reflect the changes.
-        """
-        partial = kwargs.pop('partial', False)
-        instance = self.get_object()
-        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        response_serializer = RecurrencePatternReadSerializer(pattern)
+        return Response({
+            'pattern': response_serializer.data,
+            'occurrences_created': occurrences_count
+        }, status=status.HTTP_201_CREATED)
+
+
+class RecurrencePatternDetailView(APIView):
+    """
+    Retrieve, update, or delete a recurrence pattern.
+    
+    GET /api/patterns/{id}/ - Retrieve pattern
+    PATCH /api/patterns/{id}/ - Update pattern
+    DELETE /api/patterns/{id}/ - Delete pattern
+    """
+    
+    def get(self, request, pk):
+        """Retrieve a recurrence pattern."""
+        pattern = get_object_or_404(RecurrencePattern, pk=pk)
+        serializer = RecurrencePatternReadSerializer(pattern)
+        return Response(serializer.data)
+    
+    def patch(self, request, pk):
+        """Update a recurrence pattern."""
+        pattern = get_object_or_404(RecurrencePattern, pk=pk)
+        serializer = RecurrencePatternWriteSerializer(pattern, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
-        self.perform_update(serializer)
         
-        # Return with detailed serializer
-        detail_serializer = SessionDetailSerializer(instance)
-        return Response(detail_serializer.data)
-    
-    @action(detail=True, methods=['patch', 'delete'], url_path='occurrences/(?P<occurrence_date>[^/.]+)')
-    def manage_occurrence(self, request, pk=None, occurrence_date=None):
-        """
-        Manage a single occurrence of a session.
-        
-        PATCH: Update the datetime of a specific occurrence
-        DELETE: Cancel a specific occurrence
-        
-        URL: /api/sessions/{id}/occurrences/{date}/
-        
-        For PATCH, provide:
-        {
-            "new_datetime": "2024-11-19T11:00:00Z"  // New datetime for this occurrence
-        }
-        
-        For DELETE, no body is needed.
-        """
-        session = self.get_object()
-        
-        # Parse the occurrence date
-        try:
-            occ_date = parse_date(occurrence_date)
-            if not occ_date:
-                return Response(
-                    {'error': 'Invalid date format. Use YYYY-MM-DD format.'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-        except Exception:
-            return Response(
-                {'error': 'Invalid date format. Use YYYY-MM-DD format.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # For one-time sessions, only allow operations on the exact date
-        if session.session_type == 'one_time':
-            if occ_date != session.start_datetime.date():
-                return Response(
-                    {'error': 'Cannot modify occurrence: this is a one-time session on a different date.'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-        
-        # For recurring sessions, verify the date falls on the correct weekday
-        if session.session_type == 'recurring':
-            if occ_date.weekday() != session.recurrence_day:
-                return Response(
-                    {'error': f'The date {occ_date} does not fall on the recurrence day for this session.'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            
-            # Verify the date is not before the session starts
-            if occ_date < session.start_datetime.date():
-                return Response(
-                    {'error': 'Cannot modify occurrence before the session start date.'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-        
-        if request.method == 'DELETE':
-            # Cancel this occurrence
-            exception, created = SessionException.objects.update_or_create(
-                session=session,
-                exception_date=occ_date,
-                defaults={
-                    'is_cancelled': True,
-                    'modified_datetime': None,
-                }
-            )
-            
-            return Response(
-                {'message': f'Occurrence on {occ_date} has been cancelled.'},
-                status=status.HTTP_200_OK
-            )
-        
-        elif request.method == 'PATCH':
-            # Update this occurrence
-            serializer = OccurrenceUpdateSerializer(data=request.data)
-            serializer.is_valid(raise_exception=True)
-            
-            new_datetime = serializer.validated_data.get('new_datetime')
-            cancel = serializer.validated_data.get('cancel', False)
-            
-            if cancel:
-                # Cancel this occurrence
-                exception, created = SessionException.objects.update_or_create(
-                    session=session,
-                    exception_date=occ_date,
-                    defaults={
-                        'is_cancelled': True,
-                        'modified_datetime': None,
-                    }
-                )
-                return Response(
-                    {'message': f'Occurrence on {occ_date} has been cancelled.'},
-                    status=status.HTTP_200_OK
-                )
-            
-            elif new_datetime:
-                # Modify this occurrence
-                exception, created = SessionException.objects.update_or_create(
-                    session=session,
-                    exception_date=occ_date,
-                    defaults={
-                        'is_cancelled': False,
-                        'modified_datetime': new_datetime,
-                    }
-                )
-                return Response(
-                    {
-                        'message': f'Occurrence on {occ_date} has been moved to {new_datetime}.',
-                        'new_datetime': new_datetime,
-                    },
-                    status=status.HTTP_200_OK
-                )
-        
-        return Response(
-            {'error': 'Invalid request method.'},
-            status=status.HTTP_400_BAD_REQUEST
+        update_data = PatternUpdateData(
+            title=serializer.validated_data.get('title'),
+            description=serializer.validated_data.get('description'),
+            time_of_day=serializer.validated_data.get('time'),
+            duration_minutes=serializer.validated_data.get('duration_minutes'),
+            end_date=serializer.validated_data.get('end_date'),
+            is_active=serializer.validated_data.get('is_active')
         )
-    
-    def destroy(self, request, *args, **kwargs):
-        """
-        Delete a session.
-        
-        This will delete the session and all its exceptions.
-        """
-        instance = self.get_object()
-        session_type = instance.session_type
-        title = instance.title
-        
-        self.perform_destroy(instance)
-        
-        return Response(
-            {'message': f'{session_type.replace("_", " ").title()} session "{title}" has been deleted.'},
-            status=status.HTTP_200_OK
+        updated_pattern = services.update_recurrence_pattern(
+            pattern=pattern,
+            update_data=update_data,
+            update_future_occurrences=True
         )
+        
+        response_serializer = RecurrencePatternReadSerializer(updated_pattern)
+        return Response(response_serializer.data)
+    
+    def delete(self, request, pk):
+        """Delete a recurrence pattern."""
+        pattern = get_object_or_404(RecurrencePattern, pk=pk)
+        delete_future = request.query_params.get('delete_future', 'true').lower() == 'true'
+        
+        title = pattern.title
+        services.delete_recurrence_pattern(pattern, delete_future_occurrences=delete_future)
+        
+        return Response({
+            'message': f'Pattern "{title}" has been deleted.'
+        }, status=status.HTTP_200_OK)
+
+
+class SessionOccurrenceListView(APIView):
+    """
+    List occurrences within a date range or create a one-time occurrence.
+    
+    GET /api/occurrences/?start=X&end=Y - List occurrences in range
+    POST /api/occurrences/ - Create a one-time occurrence
+    """
+    
+    def get(self, request):
+        """List occurrences within a date range."""
+        query_serializer = DateRangeQuerySerializer(data=request.query_params)
+        query_serializer.is_valid(raise_exception=True)
+        
+        start = query_serializer.validated_data['start']
+        end = query_serializer.validated_data['end']
+        status_filter = query_serializer.validated_data.get('status')
+        
+        occurrences = services.get_occurrences_in_range(
+            start, 
+            end, 
+            status_filter
+        )
+        
+        serializer = SessionOccurrenceReadSerializer(occurrences, many=True)
+        return Response(serializer.data)
+    
+    def post(self, request):
+        """Create a one-time session occurrence."""
+        serializer = SessionOccurrenceCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        occurrence = services.create_one_time_occurrence(
+            title=serializer.validated_data['title'],
+            start_datetime=serializer.validated_data['start_datetime'],
+            duration_minutes=serializer.validated_data.get('duration_minutes', 60),
+            description=serializer.validated_data.get('description', '')
+        )
+        
+        response_serializer = SessionOccurrenceReadSerializer(occurrence)
+        return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+
+
+class SessionOccurrenceDetailView(APIView):
+    """
+    Retrieve, update, or delete a session occurrence.
+    
+    GET /api/occurrences/{id}/ - Retrieve occurrence
+    PATCH /api/occurrences/{id}/ - Update occurrence
+    DELETE /api/occurrences/{id}/ - Cancel occurrence
+    """
+    
+    def get(self, request, pk):
+        """Retrieve a session occurrence."""
+        occurrence = get_object_or_404(SessionOccurrence, pk=pk)
+        serializer = SessionOccurrenceReadSerializer(occurrence)
+        return Response(serializer.data)
+    
+    def patch(self, request, pk):
+        """Update a session occurrence."""
+        occurrence = get_object_or_404(SessionOccurrence, pk=pk)
+        serializer = SessionOccurrenceUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        update_data = OccurrenceUpdateData(
+            start_datetime=serializer.validated_data.get('start_datetime'),
+            title=serializer.validated_data.get('title'),
+            description=serializer.validated_data.get('description'),
+            duration_minutes=serializer.validated_data.get('duration_minutes')
+        )
+        updated_occurrence = services.update_occurrence(
+            occurrence=occurrence,
+            update_data=update_data
+        )
+        
+        response_serializer = SessionOccurrenceReadSerializer(updated_occurrence)
+        return Response(response_serializer.data)
+    
+    def delete(self, request, pk):
+        """Cancel a session occurrence."""
+        occurrence = get_object_or_404(SessionOccurrence, pk=pk)
+        
+        services.cancel_occurrence(occurrence)
+        
+        return Response({
+            'message': f'Occurrence "{occurrence.title}" on {occurrence.start_datetime.date()} has been cancelled.'
+        }, status=status.HTTP_200_OK)
+
+
+class OccurrenceCompleteView(APIView):
+    """
+    Mark a session occurrence as completed.
+    
+    POST /api/occurrences/{id}/complete/
+    """
+    
+    def post(self, request, pk):
+        """Mark occurrence as completed."""
+        occurrence = get_object_or_404(SessionOccurrence, pk=pk)
+        
+        services.complete_occurrence(occurrence)
+        
+        return Response({
+            'message': f'Occurrence "{occurrence.title}" has been marked as completed.'
+        }, status=status.HTTP_200_OK)
